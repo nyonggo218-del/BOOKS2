@@ -1,7 +1,4 @@
 // Hardcode: /functions/[[path]]/rss.xml.js
-// [NEW] This is a "catch-all" route for flexible RSS URLs.
-// It will catch /a/b/c/rss.xml, /a/rss.xml, etc.
-// NOTE: It will NOT catch /rss.xml (that's handled by the original file)
 
 const BLOG_TITLE = "RSS FEEDS";
 const BLOG_DESCRIPTION = "ALL RSSS FEEDS";
@@ -22,25 +19,32 @@ function escapeXML(str) {
 
 export async function onRequestGet(context) {
   const { env, request, params } = context;
-  const db = env.DB;
+  const db = env.DB; // Pastikan Binding D1 di Dashboard bernama "DB"
 
   try {
     const url = new URL(request.url);
-    const SITE_URL = url.origin;
 
-    // [MODIFIED] This is the flexible part!
-    // params.path is an ARRAY of path segments
-    // e.g., /book/DOWNLOAD/FORFREE/rss.xml -> params.path = ["book", "DOWNLOAD", "FORFREE"]
-    // e.g., /book/rss.xml -> params.path = ["book"]
+    // ============================================================
+    // 🔴 PERBAIKAN UTAMA: DETEKSI SUBDOMAIN ROUTER
+    // ============================================================
+    // Kita cek apakah ada header 'X-Forwarded-Host' dari Router?
+    const forwardedHost = request.headers.get("X-Forwarded-Host");
+    
+    // Jika ada (akses dari subdomain), pakai itu. Jika tidak, pakai origin asli.
+    const SITE_URL = forwardedHost 
+      ? `${url.protocol}//${forwardedHost}` 
+      : url.origin;
+    // ============================================================
+
+    // [MODIFIED] Parsing Path Array
     const pathSegments = params.path || [];
 
-    // Assign segments flexibly:
-    const kategori = pathSegments[0] || null; // Ambil segmen pertama sbg kategori
-    const judulAwal = pathSegments[1] || ""; // Ambil segmen kedua sbg judulawal
-    const judulAkhir = pathSegments[2] || ""; // Ambil segmen ketiga sbg judulakhir
-    // Lu bisa tambahin pathSegments[3], [4], dst. kalo mau, tapi 3 ini sesuai request lu
+    // Assign segments:
+    const kategori = pathSegments[0] || null; 
+    const judulAwal = pathSegments[1] || ""; 
+    const judulAkhir = pathSegments[2] || ""; 
 
-    // 2. Siapin query SQL
+    // 2. Siapin query SQL (LOGIKA ASLI TETAP DIPERTAHANKAN)
     const queryParams = [];
     let query =
       "SELECT Judul, Deskripsi, Image, KodeUnik, tangal FROM Buku WHERE tangal IS NOT NULL AND tangal <= DATE('now')";
@@ -50,6 +54,7 @@ export async function onRequestGet(context) {
       queryParams.push(kategori);
     }
     query += " ORDER BY tangal DESC LIMIT 500";
+    
     const stmt = db.prepare(query).bind(...queryParams);
     const { results } = await stmt.all();
 
@@ -57,13 +62,17 @@ export async function onRequestGet(context) {
     const feedTitle = kategori
       ? `${escapeXML(BLOG_TITLE)} - Kategori: ${escapeXML(kategori)}`
       : escapeXML(BLOG_TITLE);
-    const selfLink = url.href;
+    
+    // Link diri sendiri (Self Link) juga harus pakai SITE_URL yang benar
+    // Kita rakit ulang URL path-nya
+    const selfPath = url.pathname; 
+    const selfLink = `${SITE_URL}${selfPath}`;
 
     // 4. Mulai bikin string XML
     let xml = `<?xml version="1.0" encoding="UTF-8" ?>
 <rss version="2.0" xmlns:g="http://base.google.com/ns/1.0" xmlns:atom="http://www.w3.org/2005/Atom">
 <channel>
-  <title>${judulAwal} ${feedTitle} ${judulAkhir}</title>
+  <title>${escapeXML(judulAwal)} ${feedTitle} ${escapeXML(judulAkhir)}</title>
   <link>${SITE_URL}</link>
   <description>${escapeXML(BLOG_DESCRIPTION)}</description>
   <language>en-us</language>
